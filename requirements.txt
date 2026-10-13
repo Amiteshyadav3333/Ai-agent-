@@ -1,0 +1,7 @@
+livekit-agents~=1.8
+livekit-plugins-synthesia~=1.8
+livekit-plugins-cartesia~=1.8
+livekit-api
+python-dotenv
+httpx
+flask

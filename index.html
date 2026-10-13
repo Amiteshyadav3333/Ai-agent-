@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Amitesh kumar Yadav</title>
+<style>
+  :root { --bg:#05070b; --fg:#f2f5fa; --muted:#9aa4b5; --accent:#6c8cff; --danger:#ff5c6c; --ok:#3ddc97; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--fg);
+               font-family:-apple-system, "Segoe UI", Roboto, sans-serif; }
+
+  /* Full-screen stage */
+  #stage { position:fixed; inset:0; background:radial-gradient(circle at 50% 40%, #121826, var(--bg) 70%); }
+  #avatarVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; display:none; }
+  #stage.has-video #avatarVideo { display:block; }
+
+  /* Start screen */
+  #start { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; text-align:center; padding:24px; }
+  #stage.connected #start { display:none; }
+  #start h1 { margin:0; font-size:clamp(24px, 4vw, 38px); }
+  #start p { margin:0; color:var(--muted); font-size:15px; }
+  #connectBtn { padding:16px 38px; border:0; border-radius:999px; font-size:18px; font-weight:700; color:#fff;
+                background:var(--accent); cursor:pointer; box-shadow:0 10px 40px rgba(108,140,255,.45); }
+  #connectBtn:disabled { opacity:.6; cursor:default; }
+
+  /* Loading hint while waiting for avatar video */
+  #waiting { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--muted); font-size:16px; }
+  #stage.connected:not(.has-video) #waiting { display:flex; }
+
+  /* Status pill */
+  #badge { position:absolute; top:max(16px, env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+           display:none; align-items:center; gap:8px; padding:8px 16px; border-radius:999px;
+           background:rgba(0,0,0,.55); backdrop-filter:blur(8px); font-size:14px; }
+  #stage.connected #badge { display:flex; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); }
+  .dot.speaking { background:var(--accent); box-shadow:0 0 10px var(--accent); }
+
+  /* Bottom controls */
+  #controls { position:absolute; left:50%; bottom:max(28px, env(safe-area-inset-bottom)); transform:translateX(-50%);
+              display:none; gap:18px; align-items:center; }
+  #stage.connected #controls { display:flex; }
+  .round { width:64px; height:64px; border-radius:50%; border:0; cursor:pointer; color:#fff; font-size:26px;
+           background:rgba(30,36,48,.85); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; }
+  .round.muted { background:#5a2a31; }
+  .round.end { background:var(--danger); }
+  #muteBtn.talking { box-shadow:0 0 0 6px rgba(108,140,255,.35); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="avatarVideo" autoplay playsinline></video>
+
+  <div id="start">
+    <h1>🎓 Amitesh kumar Yadav</h1>
+    <p>Connect karo aur bas bolo — avatar jawab dega</p>
+    <button id="connectBtn">🎙️ bolna start karo</button>
+  </div>
+
+  <div id="waiting">Avatar aa raha hai…</div>
+
+  <div id="badge"><span id="dot" class="dot"></span><span id="status">Connecting…</span></div>
+
+  <div id="controls">
+    <button id="muteBtn" class="round" title="Mic mute/unmute">🎤</button>
+    <button id="endBtn" class="round end" title="Khatam karo">✕</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+<script>
+const { Room, RoomEvent, Track } = LivekitClient;
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage"), video = $("avatarVideo"), statusEl = $("status"), dot = $("dot");
+let room = null, muted = false;
+
+function setStatus(t) { statusEl.textContent = t; }
+
+function updateAgentState() {
+  if (!room) return;
+  for (const p of room.remoteParticipants.values()) {
+    const state = p.attributes && p.attributes["lk.agent.state"];
+    if (state) {
+      const map = { initializing: "Start ho raha hai…", listening: "Sun raha hai…", thinking: "Soch raha hai…", speaking: "Bol raha hai…" };
+      setStatus(map[state] || state);
+      return;
+    }
+  }
+}
+
+async function connect() {
+  $("connectBtn").disabled = true;
+  $("connectBtn").textContent = "Connecting…";
+  try {
+    const res = await fetch(`/token?name=User`);
+    if (!res.ok) throw new Error("Token server error " + res.status);
+    const { token, url } = await res.json();
+
+    room = new Room({ adaptiveStream: true, dynacast: true });
+
+    room.on(RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === Track.Kind.Video) {
+        track.attach(video);
+        stage.classList.add("has-video");
+      } else if (track.kind === Track.Kind.Audio) {
+        const el = track.attach();
+        el.style.display = "none";
+        document.body.appendChild(el);
+      }
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach().forEach((e) => { if (e !== video) e.remove(); });
+      if (track.kind === Track.Kind.Video) stage.classList.remove("has-video");
+    });
+
+    room.on(RoomEvent.ParticipantAttributesChanged, updateAgentState);
+    room.on(RoomEvent.ParticipantConnected, updateAgentState);
+
+    room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      dot.classList.toggle("speaking", speakers.some((s) => !s.isLocal));
+      $("muteBtn").classList.toggle("talking", !muted && speakers.some((s) => s.isLocal));
+    });
+
+    room.on(RoomEvent.Disconnected, resetUI);
+
+    await room.connect(url, token);
+    await room.startAudio();
+    await room.localParticipant.setMicrophoneEnabled(true);
+
+    stage.classList.add("connected");
+    setStatus("Avatar ka wait…");
+    updateAgentState();
+  } catch (e) {
+    console.error(e);
+    $("connectBtn").disabled = false;
+    $("connectBtn").textContent = "🎙️ Phir se try karo";
+    alert("Connect nahi hua: " + e.message);
+  }
+}
+
+function resetUI() {
+  stage.classList.remove("connected", "has-video");
+  video.srcObject = null;
+  muted = false;
+  $("muteBtn").textContent = "🎤";
+  $("muteBtn").classList.remove("muted", "talking");
+  $("connectBtn").disabled = false;
+  $("connectBtn").textContent = "🎙️ Baat shuru karo";
+}
+
+$("connectBtn").onclick = connect;
+$("endBtn").onclick = () => room && room.disconnect();
+$("muteBtn").onclick = async () => {
+  muted = !muted;
+  await room.localParticipant.setMicrophoneEnabled(!muted);
+  $("muteBtn").textContent = muted ? "🔇" : "🎤";
+  $("muteBtn").classList.toggle("muted", muted);
+  if (muted) $("muteBtn").classList.remove("talking");
+};
+</script>
+</body>
+</html>
